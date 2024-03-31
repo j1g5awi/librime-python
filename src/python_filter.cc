@@ -21,9 +21,23 @@ void PythonFilter::FilterFunc( rime::an<rime::Candidate> cand, rime::CandidateQu
     const std::string comment { cand->comment() };  // return value is not a reference
     const std::string preedit { cand->preedit() };  // return value is not a reference
 
-    auto rimeext = py::module::import( "rimeext" );
-    auto PythonCandidate = rimeext.attr( "PythonCandidate" );
+
     try {
+
+        py::eval<py::eval_statements>( R"(
+        class PythonCandidate:
+            def __init__(self, candidate_type, text, comment, preedit):
+                self.text = text
+                self.candidate_type = candidate_type
+                self.comment = comment
+                self.preedit = preedit
+	    )" );
+
+        py::object PythonCandidate { py::eval( "PythonCandidate", py::globals(), py::globals() ) };
+        for ( auto& item : py::globals() ) {
+            const std::string& item_name = item.first.cast<std::string>();
+            LOG( INFO ) << item_name << '\n';
+        }
         const py::object filter_result { py_entry( PythonCandidate( candidate_type, text, comment, preedit ) ) };
 
         // Case 1: Skip the current candidate. The candidate will be remained intact
