@@ -6,7 +6,7 @@
 namespace pythonext {
 
 PythonTranslator::PythonTranslator( const rime::Ticket& ticket, py::function py_entry )
-    : Translator { ticket }, py_entry { py_entry }, TranslatorQuery { py::eval( "rimeext.TranslatorQuery", py::globals(), py::globals() ) } {}
+    : Translator { ticket }, py_entry { py_entry } {}
 
 rime::an<rime::Translation> PythonTranslator::Query( const std::string& input, const rime::Segment& segment ) noexcept {
     if ( !segment.HasTag( "abc" ) )
@@ -16,7 +16,7 @@ rime::an<rime::Translation> PythonTranslator::Query( const std::string& input, c
 
     try {
         // skip if return value is None
-        const py::object output { py_entry( TranslatorQuery( input ) ) };
+        const py::object output { py_entry( input ) };
         if ( output.is_none() )
             return nullptr;
 

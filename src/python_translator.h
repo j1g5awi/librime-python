@@ -9,9 +9,9 @@ namespace py = pybind11;
 
 namespace pythonext {
 
-class PythonSimpleTranslator : public rime::Translator {
+class PythonTranslator : public rime::Translator {
    public:
-    PythonSimpleTranslator( const rime::Ticket& ticket, py::function py_entry );
+    PythonTranslator( const rime::Ticket& ticket, py::function py_entry );
     virtual rime::an<rime::Translation> Query( const std::string& input, const rime::Segment& segment ) noexcept override;
 
    private:

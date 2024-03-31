@@ -18,7 +18,6 @@ class PythonFilter : public rime::Filter {
 
    private:
     const py::function py_entry;
-    const py::object FilterQuery;
 };
 
 class PythonFilterTranslation : public rime::PrefetchTranslation {

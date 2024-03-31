@@ -9,7 +9,7 @@ namespace pythonext {
 // PythonFilter
 
 PythonFilter::PythonFilter( const rime::Ticket& ticket, py::function py_entry )
-    : Filter { ticket }, py_entry { py_entry }, FilterQuery { py::eval( "rimeext.FilterQuery", py::globals(), py::globals() ) } {}
+    : Filter { ticket }, py_entry { py_entry } {}
 
 rime::an<rime::Translation> PythonFilter::Apply( rime::an<rime::Translation> translation, rime::CandidateList* candidates ) {
     return rime::New<PythonFilterTranslation>( this, translation );
@@ -21,8 +21,10 @@ void PythonFilter::FilterFunc( rime::an<rime::Candidate> cand, rime::CandidateQu
     const std::string comment { cand->comment() };  // return value is not a reference
     const std::string preedit { cand->preedit() };  // return value is not a reference
 
+    auto rimeext = py::module::import( "rimeext" );
+    auto PythonCandidate = rimeext.attr( "PythonCandidate" );
     try {
-        const py::object filter_result { py_entry( FilterQuery( candidate_type, text, comment, preedit ) ) };
+        const py::object filter_result { py_entry( PythonCandidate( candidate_type, text, comment, preedit ) ) };
 
         // Case 1: Skip the current candidate. The candidate will be remained intact
         const bool should_skip { filter_result.attr( "should_skip" ).cast<bool>() };
