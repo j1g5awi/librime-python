@@ -12,7 +12,16 @@ class TranslatorAnswer:
     preedit: Optional[str] = None
 
 
-def rime_main(s: str) -> Optional[List[TranslatorAnswer]]:
+def rime_main(s: str, segment, engine):
     if s == "date":
-        date = datetime.now().strftime("%Y-%m-%d")
-        return [TranslatorAnswer(date, 4, "test", "python", "")]
+        now = datetime.now()
+        date = now.strftime("%Y-%m-%d")
+        return [
+            TranslatorAnswer(
+                text=date,
+                length=len(s),
+                candidate_type="date",
+                comment=f"{now.year}-{now.month:02d}-{now.day:02d}",
+                preedit="",
+            )
+        ]

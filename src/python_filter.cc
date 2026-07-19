@@ -8,8 +8,18 @@ namespace pythonext {
 
 // PythonFilter
 
-PythonFilter::PythonFilter( const rime::Ticket& ticket, py::function py_entry )
-    : Filter { ticket }, py_entry { py_entry } {}
+PythonFilter::PythonFilter( const rime::Ticket& ticket, py::function py_entry, rime::Engine* engine, bool pass_engine )
+    : Filter { ticket }, py_entry { py_entry }, engine_ { engine }, pass_engine_ { pass_engine } {
+    py::eval<py::eval_statements>( R"(
+class PythonCandidate:
+    def __init__(self, candidate_type, text, comment, preedit):
+        self.text = text
+        self.candidate_type = candidate_type
+        self.comment = comment
+        self.preedit = preedit
+    )" );
+    py_candidate_class_ = py::eval( "PythonCandidate", py::globals(), py::globals() );
+}
 
 rime::an<rime::Translation> PythonFilter::Apply( rime::an<rime::Translation> translation, rime::CandidateList* candidates ) {
     return rime::New<PythonFilterTranslation>( this, translation );
@@ -24,32 +34,21 @@ void PythonFilter::FilterFunc( rime::an<rime::Candidate> cand, rime::CandidateQu
 
     try {
 
-        py::eval<py::eval_statements>( R"(
-        class PythonCandidate:
-            def __init__(self, candidate_type, text, comment, preedit):
-                self.text = text
-                self.candidate_type = candidate_type
-                self.comment = comment
-                self.preedit = preedit
-	    )" );
-
-        py::object PythonCandidate { py::eval( "PythonCandidate", py::globals(), py::globals() ) };
-        for ( auto& item : py::globals() ) {
-            const std::string& item_name = item.first.cast<std::string>();
-            LOG( INFO ) << item_name << '\n';
-        }
-        const py::object filter_result { py_entry( PythonCandidate( candidate_type, text, comment, preedit ) ) };
+        const py::object filter_result {
+            pass_engine_
+                ? py_entry( py_candidate_class_( candidate_type, text, comment, preedit ),
+                            py::cast( engine_, py::return_value_policy::reference ) )
+                : py_entry( py_candidate_class_( candidate_type, text, comment, preedit ) )
+        };
 
         // Case 1: Skip the current candidate. The candidate will be remained intact
-        const bool should_skip { filter_result.attr( "should_skip" ).cast<bool>() };
-        if ( should_skip ) {
+        if ( py::hasattr( filter_result, "should_skip" ) && filter_result.attr( "should_skip" ).cast<bool>() ) {
             cand_queue->emplace_back( cand );
             return;
         }
 
         // Case 2: Remove the current candidate from the candidate list
-        const bool should_remove { filter_result.attr( "should_remove" ).cast<bool>() };
-        if ( should_remove )
+        if ( py::hasattr( filter_result, "should_remove" ) && filter_result.attr( "should_remove" ).cast<bool>() )
             return;
 
         // Case 3: Change certain attributes of the current candidate
@@ -72,6 +71,8 @@ PythonFilterTranslation::PythonFilterTranslation( PythonFilter* filter, rime::an
 
 bool PythonFilterTranslation::Replenish() {
     const rime::an<rime::Candidate> cand { translation_->Peek() };
+    if ( !cand )
+        return false;
     translation_->Next();
     filter_->FilterFunc( cand, &cache_ );
     return !cache_.empty();
