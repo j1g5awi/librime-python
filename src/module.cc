@@ -14,6 +14,9 @@ namespace py = pybind11;
 
 static std::once_flag g_python_init_flag;
 
+static void InitializePythonOnce();
+static void InitPythonAndComponents();
+
 static void InitializePythonOnce() {
     try {
         py::initialize_interpreter();
@@ -39,26 +42,33 @@ static void InitializePythonOnce() {
  * @exception Throws `std::runtime_error` if the file does not exist.
  */
 static std::string getPythonScriptRealPath( const std::string& tagName ) {
-    // determine the file name
     const std::string fileName { "python/"+tagName + ".py" };
 
-    // the file should either exist in the user directory or the shared directory
-    const std::filesystem::path userDir { std::filesystem::canonical( rime_get_api()->get_user_data_dir() ) };
-    const std::filesystem::path sharedDir { std::filesystem::canonical( rime_get_api()->get_shared_data_dir() ) };
-    const std::filesystem::path userFile { userDir / fileName };
-    const std::filesystem::path sharedFile { sharedDir / fileName };
-    const bool userFileExists { std::filesystem::exists( userFile ) };
-    const bool sharedFileExists { std::filesystem::exists( sharedFile ) };
+    auto resolveDir = [](const char* (*getter)()) -> std::filesystem::path {
+        if (!getter) return {};
+        const char* dir = getter();
+        if (!dir || !*dir) return {};
+        try {
+            return std::filesystem::canonical(dir);
+        } catch (const std::exception& e) {
+            LOG(WARNING) << "failed to resolve path '" << dir << "': " << e.what();
+            return std::filesystem::path(dir);
+        }
+    };
 
-    if ( !userFileExists && !sharedFileExists ) {
-        LOG( ERROR ) << "Expected file " << fileName << " in the user directory ("
-                     << userDir.string() << ") or in the shared directory ("
-                     << sharedDir.string() << ").";
+    const auto userDir = resolveDir(rime_get_api()->get_user_data_dir);
+    const auto sharedDir = resolveDir(rime_get_api()->get_shared_data_dir);
+    const auto userFile = userDir / fileName;
+    const auto sharedFile = sharedDir / fileName;
+    const bool userFileExists = !userDir.empty() && std::filesystem::exists(userFile);
+    const bool sharedFileExists = !sharedDir.empty() && std::filesystem::exists(sharedFile);
+
+    if (!userFileExists && !sharedFileExists) {
+        LOG(ERROR) << "Expected file " << fileName << " not found.";
         return "";
     }
 
-    // prefer the file in the user directory
-    return ( userFileExists ? userFile : sharedFile ).string();
+    return (userFileExists ? userFile : sharedFile).string();
 }
 
 template <typename T>
@@ -67,21 +77,29 @@ class PythonComponent : public T::Component {
     PythonComponent() {};
 
     T* Create( const rime::Ticket& ticket ) {
-        std::call_once(g_python_init_flag, InitializePythonOnce);
+        LOG(INFO) << "PythonComponent::Create klass=" << ticket.klass
+                  << " ns=" << ticket.name_space;
+
+        InitPythonAndComponents();
 
         const rime::Ticket ticket_ { ticket.engine, ticket.name_space, ticket.name_space };
         const std::string& tagName { ticket_.name_space };
 
-        // load Python script file
         const std::string pythonScriptPath { getPythonScriptRealPath( tagName ) };
-        if ( pythonScriptPath.empty() )
+        if ( pythonScriptPath.empty() ) {
+            LOG(ERROR) << "script not found for tag '" << tagName << "'";
             return nullptr;
+        }
 
         LOG( INFO ) << "reading Python script file " << pythonScriptPath << ".";
 
         try {
             py::dict module_ns;
             py::eval_file( pythonScriptPath, module_ns, module_ns );
+            if ( !module_ns.contains( "rime_main" ) ) {
+                LOG(ERROR) << "rime_main not defined in " << pythonScriptPath;
+                return nullptr;
+            }
             py::function py_entry { module_ns[ "rime_main" ].cast<py::function>() };
             py::object code { py_entry.attr( "__code__" ) };
             int argc = code.attr( "co_argcount" ).cast<int>();
@@ -89,30 +107,59 @@ class PythonComponent : public T::Component {
             if constexpr ( std::is_same_v<T, pythonext::PythonTranslator> ) {
                 py::object inspect = py::module_::import( "inspect" );
                 bool is_gen = inspect.attr( "isgeneratorfunction" )( py_entry ).cast<bool>();
+                LOG(INFO) << "creating translator, is_gen=" << is_gen;
                 return new T { ticket_, py_entry, ticket.engine, argc, is_gen };
             } else {
                 bool pass_engine = ( argc >= 2 ) || ( flags & 0x04 );
+                LOG(INFO) << "creating processor/filter/segmentor, pass_engine=" << pass_engine;
                 return new T { ticket_, py_entry, ticket.engine, pass_engine };
             }
         } catch ( const py::error_already_set& e ) {
-            LOG( ERROR ) << e.what();
+            LOG( ERROR ) << "python error: " << e.what();
+            return nullptr;
+        } catch ( const std::exception& e ) {
+            LOG( ERROR ) << "cpp error: " << e.what();
             return nullptr;
         }
     }
 };
 
-// Python components are registered at static init time via the template Create()
-// method, which also lazily initializes the Python interpreter on first use.
-// This avoids relying on WeaselServer's module list to include "pythonext".
+static void InitPythonAndComponents() {
+    std::call_once(g_python_init_flag, []() {
+        InitializePythonOnce();
+        rime::Registry::instance().Register(
+            "python_translator", new PythonComponent<pythonext::PythonTranslator>());
+        rime::Registry::instance().Register(
+            "python_filter", new PythonComponent<pythonext::PythonFilter>());
+        rime::Registry::instance().Register(
+            "python_processor", new PythonComponent<pythonext::PythonProcessor>());
+        rime::Registry::instance().Register(
+            "python_segmentor", new PythonComponent<pythonext::PythonSegmentor>());
+    });
+}
 
+// Register via RIME_REGISTER_MODULE (called by fcitx5-rime on Linux).
+#if defined(_WIN32)
+// Windows: register via static init (module init may not be called).
 template <typename T>
 struct ComponentRegistrar {
     ComponentRegistrar(const char* name) {
         rime::Registry::instance().Register(name, new PythonComponent<T>());
     }
 };
-
 static ComponentRegistrar<pythonext::PythonTranslator> reg_translator("python_translator");
 static ComponentRegistrar<pythonext::PythonFilter> reg_filter("python_filter");
 static ComponentRegistrar<pythonext::PythonProcessor> reg_processor("python_processor");
 static ComponentRegistrar<pythonext::PythonSegmentor> reg_segmentor("python_segmentor");
+
+static void rime_pythonext_initialize() {}
+static void rime_pythonext_finalize() {}
+#else
+// Linux: register in module init (avoids cross-library dynamic_cast issues).
+static void rime_pythonext_initialize() {
+    InitPythonAndComponents();
+}
+static void rime_pythonext_finalize() {}
+#endif
+
+RIME_REGISTER_MODULE(pythonext)
