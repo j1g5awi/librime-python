@@ -21,7 +21,10 @@ rime::ProcessResult PythonProcessor::ProcessKeyEvent( const rime::KeyEvent& key_
         int code = result.cast<int>();
         return code == 1 ? rime::kAccepted : rime::kNoop;
     } catch ( const py::error_already_set& e ) {
-        LOG( ERROR ) << e.what();
+        LOG( ERROR ) << "python_processor py error: " << e.what();
+        return rime::kNoop;
+    } catch ( const std::exception& e ) {
+        LOG( ERROR ) << "python_processor cpp error: " << e.what();
         return rime::kNoop;
     }
 }

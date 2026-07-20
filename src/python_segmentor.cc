@@ -21,7 +21,10 @@ bool PythonSegmentor::Proceed(rime::Segmentation* segmentation) {
     }
     return py_entry(seg_obj).cast<bool>();
   } catch (const py::error_already_set& e) {
-    LOG(ERROR) << e.what();
+    LOG(ERROR) << "python_segmentor py error: " << e.what();
+    return false;
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "python_segmentor cpp error: " << e.what();
     return false;
   }
 }

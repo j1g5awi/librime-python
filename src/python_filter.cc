@@ -33,7 +33,6 @@ void PythonFilter::FilterFunc( rime::an<rime::Candidate> cand, rime::CandidateQu
 
 
     try {
-
         const py::object filter_result {
             pass_engine_
                 ? py_entry( py_candidate_class_( candidate_type, text, comment, preedit ),

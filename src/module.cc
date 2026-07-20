@@ -1,5 +1,6 @@
 #include <pybind11/embed.h>
 #include <filesystem>
+#include <mutex>
 #include <type_traits>
 #include <rime/common.h>
 #include <rime/registry.h>
@@ -10,6 +11,25 @@
 #include "python_segmentor.h"
 
 namespace py = pybind11;
+
+static std::once_flag g_python_init_flag;
+
+static void InitializePythonOnce() {
+    try {
+        py::initialize_interpreter();
+    } catch ( const std::runtime_error& e ) {
+        LOG( WARNING ) << "Python interpreter already initialized: " << e.what();
+    }
+    try {
+        py::module_::import( "rimeext" );
+    } catch ( const py::error_already_set& e ) {
+        LOG( ERROR ) << "failed to import rimeext module: " << e.what();
+    }
+    try {
+        py::module_::import( "rimeext_ext" );
+    } catch ( const py::error_already_set& ) {
+    }
+}
 
 /**
  * Determine the path to the Python script file according to the name string of a rime component.
@@ -47,6 +67,8 @@ class PythonComponent : public T::Component {
     PythonComponent() {};
 
     T* Create( const rime::Ticket& ticket ) {
+        std::call_once(g_python_init_flag, InitializePythonOnce);
+
         const rime::Ticket ticket_ { ticket.engine, ticket.name_space, ticket.name_space };
         const std::string& tagName { ticket_.name_space };
 
@@ -79,38 +101,18 @@ class PythonComponent : public T::Component {
     }
 };
 
-static void rime_pythonext_initialize() {
-    LOG( INFO ) << "registering components from module 'pythonext'.";
+// Python components are registered at static init time via the template Create()
+// method, which also lazily initializes the Python interpreter on first use.
+// This avoids relying on WeaselServer's module list to include "pythonext".
 
-    try {
-        py::initialize_interpreter();
-    } catch ( const std::runtime_error& e ) {
-        LOG( WARNING ) << "Python interpreter already initialized: " << e.what();
+template <typename T>
+struct ComponentRegistrar {
+    ComponentRegistrar(const char* name) {
+        rime::Registry::instance().Register(name, new PythonComponent<T>());
     }
+};
 
-    // ensure embedded rimeext module is loaded into the running interpreter
-    try {
-        py::module_::import( "rimeext" );
-    } catch ( const py::error_already_set& e ) {
-        LOG( ERROR ) << "failed to import rimeext module: " << e.what();
-    }
-    try {
-        py::module_::import( "rimeext_ext" );
-    } catch ( const py::error_already_set& ) {
-        // optional module, ignore
-    }
-
-    rime::Registry& r { rime::Registry::instance() };
-    r.Register( "python_translator", new PythonComponent<pythonext::PythonTranslator>() );
-    r.Register( "python_filter", new PythonComponent<pythonext::PythonFilter>() );
-    r.Register( "python_processor", new PythonComponent<pythonext::PythonProcessor>() );
-    r.Register( "python_segmentor", new PythonComponent<pythonext::PythonSegmentor>() );
-}
-
-static void rime_pythonext_finalize() {
-    if ( Py_IsInitialized() ) {
-        py::finalize_interpreter();
-    }
-}
-
-RIME_REGISTER_MODULE( pythonext )
+static ComponentRegistrar<pythonext::PythonTranslator> reg_translator("python_translator");
+static ComponentRegistrar<pythonext::PythonFilter> reg_filter("python_filter");
+static ComponentRegistrar<pythonext::PythonProcessor> reg_processor("python_processor");
+static ComponentRegistrar<pythonext::PythonSegmentor> reg_segmentor("python_segmentor");
